@@ -1,6 +1,8 @@
-from flask import Flask, request, Response, render_template_string
+from flask import Flask, request, Response, render_template_string, redirect, url_for
 import requests
+from urllib.parse import urlparse, urljoin
 import logging
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 log = logging.getLogger('werkzeug')
@@ -43,17 +45,34 @@ def index():
 
 @app.route('/proxy')
 def proxy():
-    url = request.args.get("url")
-    if not url:
+    target_url = request.args.get("url")
+    if not target_url:
         return "URLが指定されていません", 400
+
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Accept-Language": "ja,en;q=0.9",
             "Referer": "https://www.google.com/"
         }
-        r = requests.get(url, headers=headers, timeout=6)
-        return Response(r.content, status=r.status_code, content_type=r.headers.get('Content-Type', 'text/html'))
+        r = requests.get(target_url, headers=headers, timeout=6)
+        content_type = r.headers.get('Content-Type', '')
+
+        if "text/html" in content_type:
+            soup = BeautifulSoup(r.text, "html.parser")
+            for tag in soup.find_all(["a", "link", "script", "img", "form"]):
+                attr = "href" if tag.name in ["a", "link"] else "src" if tag.name in ["script", "img"] else "action" if tag.name == "form" else None
+                if attr and tag.has_attr(attr):
+                    raw = tag[attr]
+                    if raw.startswith("http"):
+                        proxied_url = f"/proxy?url={raw}"
+                    else:
+                        joined = urljoin(target_url, raw)
+                        proxied_url = f"/proxy?url={joined}"
+                    tag[attr] = proxied_url
+            return str(soup)
+        else:
+            return Response(r.content, status=r.status_code, content_type=content_type)
+
     except Exception as e:
         return f"⚠️ アクセスエラー: {e}", 500
-
